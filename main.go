@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
 type User struct {
@@ -21,6 +24,14 @@ var users = map[int64]User{
 		Password: "Exdark123",
 	},
 }
+
+// в ПРОДЕ обязательно
+// env-переменная
+//
+// длинный ключ
+//
+// не в коде
+var jwtSecret = []byte("super-secret-key")
 
 type contextKey string
 
@@ -41,15 +52,23 @@ func getUserId(w http.ResponseWriter, r *http.Request) {
 	}
 	for id, user := range users {
 		if user.Username == creds.Username && user.Password == creds.Password {
-			token := fmt.Sprintf("token_%d", id)
-			json.NewEncoder(w).Encode(map[string]any{
+			claims := jwt.MapClaims{
 				"user_id": id,
-				"token":   token,
+				"exp":     time.Now().Add(time.Hour).Unix(),
+			}
+			token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+			tokenString, err := token.SignedString(jwtSecret)
+			if err != nil {
+				http.Error(w, "token invalid", http.StatusBadRequest)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]string{
+				"token": tokenString,
 			})
 			return
 		}
 	}
-	http.Error(w, "User not found", http.StatusNotFound)
+	http.Error(w, "Invalid  not found", http.StatusNotFound)
 }
 
 func getUser(w http.ResponseWriter, r *http.Request) {
@@ -79,16 +98,25 @@ func authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		parts := strings.Split(auth, " ")
-		if len(parts) != 2 {
+		if len(parts) != 2 || parts[0] != "Bearer" {
 			http.Error(w, "Not authorized", http.StatusUnauthorized)
 			return
 		}
-		var userID int64
+		tokenString := parts[1]
 
-		_, err := fmt.Sscanf(parts[1], "token-%d", &userID)
-		if err != nil {
+		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("Unexpected signing method")
+			}
+			return jwtSecret, nil
+		})
+		if err != nil || !token.Valid {
 			http.Error(w, "Invalid token", http.StatusUnauthorized)
+			return
 		}
+
+		claims := token.Claims.(jwt.MapClaims)
+		userID := int64(claims["user_id"].(float64))
 
 		ctx := context.WithValue(r.Context(), userIDKey, userID)
 		r = r.WithContext(ctx)

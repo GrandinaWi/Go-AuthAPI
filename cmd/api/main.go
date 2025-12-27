@@ -55,7 +55,7 @@ func getUserHandler(w http.ResponseWriter, r *http.Request, svc user.Service) {
 		http.Error(w, "DB error GetUser", http.StatusInternalServerError)
 		return
 	}
-	return
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(u)
 }
 func authMiddleware(next http.Handler) http.Handler {
@@ -179,5 +179,17 @@ func main() {
 			getUserHandler(w, r, service)
 		})),
 	)
-	http.ListenAndServe(":8080", mux)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+
+		if r.Method == http.MethodOptions {
+			return
+		}
+
+		mux.ServeHTTP(w, r)
+	})
+	http.ListenAndServe(":8080", handler)
+	//http.ListenAndServe(":8080", mux)
 }

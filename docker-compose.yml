@@ -4,26 +4,43 @@ services:
   db:
     image: postgres:16
     container_name: postgres
-    restart: always
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: app_db
     ports:
-      - "5433:5433"
+      - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  migrate:
+    image: migrate/migrate:v4.17.0
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./migrations:/migrations
+    command:
+      [
+        "-path", "/migrations",
+        "-database",
+        "postgres://postgres:postgres@db:5432/app_db?sslmode=disable",
+        "up"
+      ]
 
   api:
     build: .
-    container_name: go-api
     depends_on:
-      - db
+      - migrate
     ports:
       - "8080:8080"
     env_file:
       - .env
-    restart: always
 
 volumes:
   pgdata:

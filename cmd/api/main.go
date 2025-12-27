@@ -9,6 +9,7 @@ import (
 	"gostart/internal/user"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -31,57 +32,13 @@ var db *sql.DB
 // длинный ключ
 //
 // не в коде
-var jwtSecret = []byte("super-secret-key")
+var jwtSecret = []byte(os.Getenv("JWT_SECRET"))
 
 type contextKey string
 
 const userIDKey contextKey = "userID"
 
-//func getUserId(w http.ResponseWriter, r *http.Request) {
-//	if r.Method != http.MethodPost {
-//		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-//		return
-//	}
-//	var creds struct {
-//		Username string `json:"username"`
-//		Password string `json:"password"`
-//	}
-//	if err := json.NewDecoder(r.Body).Decode(&creds); err != nil {
-//		http.Error(w, "Json invalid", http.StatusBadRequest)
-//		return
-//	}
-//	var userID int64
-//	err := db.QueryRow(
-//		"SELECT id FROM public.users WHERE username=$1 AND password=$2",
-//		creds.Username,
-//		creds.Password,
-//	).Scan(&userID)
-//
-//	if err == sql.ErrNoRows {
-//		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
-//		return
-//	}
-//	if err != nil {
-//		log.Println("login query error:", err)
-//		http.Error(w, "DB error", http.StatusInternalServerError)
-//		return
-//	}
-//	claims := jwt.MapClaims{
-//		"user_id": userID,
-//		"exp":     time.Now().Add(time.Hour).Unix(),
-//	}
-//	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-//	tokenString, err := token.SignedString(jwtSecret)
-//	if err != nil {
-//		http.Error(w, "token invalid", http.StatusBadRequest)
-//		return
-//	}
-//	json.NewEncoder(w).Encode(map[string]string{
-//		"token": tokenString,
-//	})
-//}
-
-func getUser(w http.ResponseWriter, r *http.Request) {
+func getUserHandler(w http.ResponseWriter, r *http.Request, svc user.Service) {
 
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -93,17 +50,13 @@ func getUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "User not found", http.StatusNotFound)
 		return
 	}
-	var user User
-	err := db.QueryRow("SELECT username,age FROM public.users WHERE id = $1", userID).Scan(&user.Username, &user.Age)
-	if err == sql.ErrNoRows {
-		http.NotFound(w, r)
+	u, err := svc.GetUser(r.Context(), userID)
+	if err != nil {
+		http.Error(w, "DB error GetUser", http.StatusInternalServerError)
 		return
 	}
-	json.NewEncoder(w).Encode(map[string]any{
-		"user_id":  userID,
-		"username": user.Username,
-		"age":      user.Age,
-	})
+	return
+	json.NewEncoder(w).Encode(u)
 }
 func authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -139,15 +92,18 @@ func authMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
-func loginHandler(w http.ResponseWriter, r *http.Request, repo user.Repository) {
+func loginHandler(w http.ResponseWriter, r *http.Request, svc user.Service) {
 	var creds struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
-	json.NewDecoder(r.Body).Decode(&creds)
-	u, err := repo.GetByCredentials(r.Context(), creds.Username, creds.Password)
+	if err := json.NewDecoder(r.Body).Decode(&creds); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	u, err := svc.Login(r.Context(), creds.Username, creds.Password)
 	if err != nil {
-		http.Error(w, "DB error", http.StatusInternalServerError)
+		http.Error(w, "DB error Login", http.StatusInternalServerError)
 		return
 	}
 	if u == nil {
@@ -168,7 +124,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request, repo user.Repository) 
 		"token": tokenString,
 	})
 }
-func registerHandler(w http.ResponseWriter, r *http.Request, repo user.Repository) {
+func registerHandler(w http.ResponseWriter, r *http.Request, svc user.Service) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -182,13 +138,13 @@ func registerHandler(w http.ResponseWriter, r *http.Request, repo user.Repositor
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
-	u, err := repo.Create(r.Context(), creds.Username, creds.Password, creds.Age)
+	u, err := svc.Register(r.Context(), creds.Username, creds.Password, creds.Age)
 	if err != nil {
 		if errors.Is(err, user.ErrUserAlreadyExists) {
 			http.Error(w, "User already exists", http.StatusConflict) // 409
 			return
 		}
-		http.Error(w, "DB error", http.StatusInternalServerError)
+		http.Error(w, "DB error Register", http.StatusInternalServerError)
 		return
 	}
 	json.NewEncoder(w).Encode(map[string]any{
@@ -198,22 +154,30 @@ func registerHandler(w http.ResponseWriter, r *http.Request, repo user.Repositor
 }
 func main() {
 	var err error
-	dsn := "postgres://postgres:Exdark123@localhost:5432/postgres?sslmode=disable"
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		log.Fatal("DATABASE_URL not set")
+	}
 	db, err = sql.Open("postgres", dsn)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	userRepo := user.NewPostgres(db)
+	service := user.NewService(userRepo)
 	log.Println("Connected to postgres")
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
-		loginHandler(w, r, userRepo)
+		loginHandler(w, r, service)
 	})
 	mux.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
-		registerHandler(w, r, userRepo)
+		registerHandler(w, r, service)
 	})
-	mux.Handle("/user", authMiddleware(http.HandlerFunc(getUser)))
+	mux.Handle("/user",
+		authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			getUserHandler(w, r, service)
+		})),
+	)
 	http.ListenAndServe(":8080", mux)
 }

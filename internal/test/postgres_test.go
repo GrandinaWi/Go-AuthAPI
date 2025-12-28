@@ -1,8 +1,9 @@
-package user
+package test
 
 import (
 	"context"
 	"database/sql"
+	db2 "gostart/internal/user"
 	"testing"
 
 	_ "github.com/lib/pq"
@@ -10,7 +11,7 @@ import (
 
 func TestUserCrateAndLogin(t *testing.T) {
 	db := setupTestDB(t)
-	repo := NewPostgres(db)
+	repo := db2.NewPostgres(db)
 	ctx := context.Background()
 
 	u, err := repo.Create(ctx, "testuser", "secret123", 30)

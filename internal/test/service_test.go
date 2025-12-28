@@ -1,7 +1,8 @@
-package user
+package test
 
 import (
 	"context"
+	"gostart/internal/user"
 	"testing"
 
 	_ "github.com/lib/pq"
@@ -9,8 +10,8 @@ import (
 
 func TestLoginAndRegister(t *testing.T) {
 	db := setupTestDB(t)
-	repo := NewPostgres(db)
-	service := NewService(repo)
+	repo := user.NewPostgres(db)
+	service := user.NewService(repo)
 	ctx := context.Background()
 
 	u, err := service.Register(ctx, "testuser", "secret123", 30)
@@ -44,8 +45,8 @@ func TestLoginAndRegister(t *testing.T) {
 }
 func TestService_GetUser(t *testing.T) {
 	db := setupTestDB(t)
-	repo := NewPostgres(db)
-	service := NewService(repo)
+	repo := user.NewPostgres(db)
+	service := user.NewService(repo)
 	ctx := context.Background()
 
 	u, err := service.Register(ctx, "testuser", "secret123", 30)
